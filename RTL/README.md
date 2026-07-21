@@ -1,1 +1,9 @@
-# CIC-filter_YADRO-MIET
+# RTL
+
+Папка содержит RTL-описание CIC-фильтра и файлы для его проверки.
+
+## Структура
+
+```text
+modules/ — синтезируемые SystemVerilog-модули
+tb/      — testbench-файлы для моделирования

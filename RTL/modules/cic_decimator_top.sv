@@ -1,6 +1,6 @@
 `timescale 1ns / 1ps
 
-// Топ-модуль CIC-декиматора
+// Топ-модуль
 
 module cic_decimator_top #(
     parameter IN_WIDTH   = cic_parameters_pkg::IN_WIDTH,

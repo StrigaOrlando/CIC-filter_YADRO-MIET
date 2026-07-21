@@ -1,6 +1,6 @@
 `timescale 1ns /1ps
 
-// Testbench для CIC-декиматора
+// Testbench
 
 module tb_cic_decimator;
 

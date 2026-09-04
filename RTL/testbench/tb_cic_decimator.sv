@@ -1,9 +1,6 @@
 `timescale 1ns /1ps
 
-// Testbench
-
 module tb_cic_decimator;
-
 
     parameter IN_WIDTH   = cic_parameters_pkg::IN_WIDTH;
     parameter OUT_WIDTH  = cic_parameters_pkg::FULL_WIDTH;
@@ -17,7 +14,6 @@ module tb_cic_decimator;
     parameter INPUT_FILE  = "C:/CIC/Programmy_moi/cic_decimator_project/rtl_test_case/input.txt";
     parameter OUTPUT_FILE = "C:/CIC/Programmy_moi/cic_decimator_project/rtl_test_case/rtl_output.txt";
 
-
     localparam LOG2_RM    = $clog2(R * M);
     localparam GROWTH_W   = (N * LOG2_RM) + (((R*M) != (2**LOG2_RM)) ? 1 : 0);
     localparam FULL_W     = IN_WIDTH + GROWTH_W;
@@ -25,21 +21,18 @@ module tb_cic_decimator;
     localparam TDATA_IN_W  = ((IN_WIDTH  + 7) / 8) * 8;
     localparam TDATA_OUT_W = ((OUT_WIDTH + 7) / 8) * 8;
 
+    logic i_clk = 0;
+    logic i_rst_n;
 
-    logic clk = 0;
-    logic rst_n;
+    logic [TDATA_IN_W-1:0]  i_din_tdata;
+    logic                   i_din_vld;
+    logic                   o_din_tready;
 
-    logic [TDATA_IN_W-1:0]  s_din_tdata;
-    logic                   s_din_tvalid;
-    logic                   s_din_tready;
+    logic [TDATA_OUT_W-1:0] o_dout_tdata;
+    logic                   o_dout_vld;
+    logic                   i_dout_tready;
 
-    logic [TDATA_OUT_W-1:0] m_dout_tdata;
-    logic                   m_dout_tvalid;
-    logic                   m_dout_tready;
-
-
-    always #5 clk = ~clk;
-
+    always #5 i_clk = ~i_clk;
 
     cic_decimator_top #(
         .IN_WIDTH    (IN_WIDTH),
@@ -51,16 +44,15 @@ module tb_cic_decimator;
         .ROUND_MODE  (ROUND_MODE),
         .NORMALIZE   (NORMALIZE)
     ) dut (
-        .clk          (clk),
-        .rst_n        (rst_n),
-        .s_din_tdata  (s_din_tdata),
-        .s_din_tvalid (s_din_tvalid),
-        .s_din_tready (s_din_tready),
-        .m_dout_tdata (m_dout_tdata),
-        .m_dout_tvalid(m_dout_tvalid),
-        .m_dout_tready(m_dout_tready)
+        .i_clk        (i_clk),
+        .i_rst_n      (i_rst_n),
+        .i_din_tdata  (i_din_tdata),
+        .i_din_vld    (i_din_vld),
+        .o_din_tready (o_din_tready),
+        .o_dout_tdata (o_dout_tdata),
+        .o_dout_vld   (o_dout_vld),
+        .i_dout_tready(i_dout_tready)
     );
-
 
     int input_fd, output_fd;
     int sample_val;
@@ -84,14 +76,14 @@ module tb_cic_decimator;
         $display("  FULL_WIDTH=%0d", FULL_W);
         $display("============================================================");
 
-        rst_n = 0;
-        s_din_tvalid = 0;
-        s_din_tdata  = 0;
-        m_dout_tready = 1'b1;
+        i_rst_n = 0;
+        i_din_vld = 0;
+        i_din_tdata  = 0;
+        i_dout_tready = 1'b1;
 
-        repeat(20) @(posedge clk);
-        rst_n = 1;
-        repeat(5) @(posedge clk);
+        repeat(20) @(posedge i_clk);
+        i_rst_n = 1;
+        repeat(5) @(posedge i_clk);
         $display("[TB] Reset released");
 
         input_fd = $fopen(INPUT_FILE, "r");
@@ -117,45 +109,44 @@ module tb_cic_decimator;
         $display("[TB] Read %0d input samples", input_queue.size());
         $display("[TB] Expected output length: %0d samples", expected_output_len);
 
-
         fork
             begin : input_thread
                 while (input_idx < input_queue.size()) begin
-                    @(posedge clk);
-                    if (s_din_tready) begin
-                        s_din_tvalid <= 1'b1;
-                        s_din_tdata  <= {{(TDATA_IN_W-IN_WIDTH){input_queue[input_idx][IN_WIDTH-1]}},
+                    @(posedge i_clk);
+                    if (o_din_tready) begin
+                        i_din_vld <= 1'b1;
+                        i_din_tdata  <= {{(TDATA_IN_W-IN_WIDTH){input_queue[input_idx][IN_WIDTH-1]}},
                                          input_queue[input_idx][IN_WIDTH-1:0]};
                         input_idx++;
                     end
                 end
 
                 repeat(R * N * M) begin
-                    @(posedge clk);
-                    if (s_din_tready) begin
-                        s_din_tvalid <= 1'b1;
-                        s_din_tdata  <= '0;
+                    @(posedge i_clk);
+                    if (o_din_tready) begin
+                        i_din_vld <= 1'b1;
+                        i_din_tdata  <= '0;
                     end
                 end
 
-                @(posedge clk);
-                s_din_tvalid <= 1'b0;
-                s_din_tdata  <= '0;
+                @(posedge i_clk);
+                i_din_vld <= 1'b0;
+                i_din_tdata  <= '0;
                 input_done   = 1'b1;
                 $display("[TB] Input thread finished, %0d samples sent", input_idx);
             end
 
             begin : output_thread
                 forever begin
-                    @(posedge clk);
-                    if (m_dout_tvalid && m_dout_tready) begin
+                    @(posedge i_clk);
+                    if (o_dout_vld && i_dout_tready) begin
                         int captured;
-                        captured = int'($signed(m_dout_tdata[OUT_WIDTH-1:0]));
+                        captured = int'($signed(o_dout_tdata[OUT_WIDTH-1:0]));
                         output_queue.push_back(captured);
                         output_idx++;
                     end
 
-                    if (input_done && !m_dout_tvalid) begin
+                    if (input_done && !o_dout_vld) begin
                         idle_cycles++;
                         if (idle_cycles > MAX_IDLE_CYCLES) begin
                             $display("[TB] No more output after %0d idle cycles", MAX_IDLE_CYCLES);
@@ -167,7 +158,7 @@ module tb_cic_decimator;
                     end
 
                     if (output_idx >= expected_output_len && input_done) begin
-                        repeat(R * N * 2) @(posedge clk);
+                        repeat(R * N * 2) @(posedge i_clk);
                         output_done = 1'b1;
                         break;
                     end
@@ -203,7 +194,7 @@ module tb_cic_decimator;
     end
 
     initial begin
-        repeat(1000000) @(posedge clk);
+        repeat(1000000) @(posedge i_clk);
         $error("[TB] TIMEOUT after 1M cycles");
         $finish;
     end

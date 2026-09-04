@@ -1,9 +1,9 @@
 module cic_decimator_top #(
-    parameter IN_WIDTH    = cic_parameters_pkg::IN_WIDTH,
-    parameter OUT_WIDTH   = cic_parameters_pkg::FULL_WIDTH,
-    parameter R           = cic_parameters_pkg::R,
-    parameter M           = cic_parameters_pkg::M,
-    parameter N           = cic_parameters_pkg::N,
+    parameter IN_WIDTH   = cic_parameters_pkg::IN_WIDTH,
+    parameter OUT_WIDTH  = cic_parameters_pkg::FULL_WIDTH,
+    parameter R          = cic_parameters_pkg::R,
+    parameter M          = cic_parameters_pkg::M,
+    parameter N          = cic_parameters_pkg::N,
     parameter OUTPUT_MODE = cic_parameters_pkg::OUTPUT_MODE,
     parameter ROUND_MODE  = cic_parameters_pkg::ROUND_MODE,
     parameter NORMALIZE   = cic_parameters_pkg::NORMALIZE
@@ -12,11 +12,11 @@ module cic_decimator_top #(
     input  logic i_rst_n,
 
     input  logic [((IN_WIDTH+7)/8)*8-1:0]  i_din_tdata,
-    input  logic                           i_din_tvalid,
+    input  logic                           i_din_vld,
     output logic                           o_din_tready,
 
     output logic [((OUT_WIDTH+7)/8)*8-1:0] o_dout_tdata,
-    output logic                           o_dout_tvalid,
+    output logic                           o_dout_vld,
     input  logic                           i_dout_tready
 );
 
@@ -33,19 +33,19 @@ module cic_decimator_top #(
     localparam TDATA_OUT_W = ((OUT_WIDTH + 7) / 8) * 8;
 
     logic signed [FULL_WIDTH-1:0] int_dout [0:N];
-    logic                         int_valid [0:N];
+    logic                         int_vld [0:N];
 
     logic signed [FULL_WIDTH-1:0] dec_dout;
-    logic                         dec_valid;
+    logic                         dec_vld;
 
     logic signed [FULL_WIDTH-1:0] comb_dout [0:N];
-    logic                         comb_valid [0:N];
+    logic                         comb_vld [0:N];
 
     logic signed [FULL_WIDTH-1:0] norm_dout;
-    logic                         norm_valid;
+    logic                         norm_vld;
 
     logic signed [ACTUAL_OUT_WIDTH-1:0] round_dout;
-    logic                               round_valid;
+    logic                               round_vld;
 
     assign o_din_tready = 1'b1;
 
@@ -53,7 +53,7 @@ module cic_decimator_top #(
     assign din_data = IN_WIDTH'(i_din_tdata[IN_WIDTH-1:0]);
 
     assign int_dout[0]  = din_data;
-    assign int_valid[0] = i_din_tvalid;
+    assign int_vld[0] = i_din_vld;
 
     generate
         genvar i;
@@ -68,9 +68,9 @@ module cic_decimator_top #(
                 .i_clk      (i_clk),
                 .i_rst_n    (i_rst_n),
                 .i_din      (int_dout[i][INT_IN_W-1:0]),
-                .i_din_vld  (int_valid[i]),
+                .i_din_vld  (int_vld[i]),
                 .o_dout     (int_dout[i+1]),
-                .o_dout_vld (int_valid[i+1])
+                .o_dout_vld (int_vld[i+1])
             );
         end
     endgenerate
@@ -82,13 +82,13 @@ module cic_decimator_top #(
         .i_clk      (i_clk),
         .i_rst_n    (i_rst_n),
         .i_din      (int_dout[N]),
-        .i_din_vld  (int_valid[N]),
+        .i_din_vld  (int_vld[N]),
         .o_dout     (dec_dout),
-        .o_dout_vld (dec_valid)
+        .o_dout_vld (dec_vld)
     );
 
     assign comb_dout[0]  = dec_dout;
-    assign comb_valid[0] = dec_valid;
+    assign comb_vld[0] = dec_vld;
 
     generate
         genvar j;
@@ -101,9 +101,9 @@ module cic_decimator_top #(
                 .i_clk      (i_clk),
                 .i_rst_n    (i_rst_n),
                 .i_din      (comb_dout[j]),
-                .i_din_vld  (comb_valid[j]),
+                .i_din_vld  (comb_vld[j]),
                 .o_dout     (comb_dout[j+1]),
-                .o_dout_vld (comb_valid[j+1])
+                .o_dout_vld (comb_vld[j+1])
             );
         end
     endgenerate
@@ -119,13 +119,13 @@ module cic_decimator_top #(
                 .i_clk      (i_clk),
                 .i_rst_n    (i_rst_n),
                 .i_din      (comb_dout[N]),
-                .i_din_vld  (comb_valid[N]),
+                .i_din_vld  (comb_vld[N]),
                 .o_dout     (norm_dout),
-                .o_dout_vld (norm_valid)
+                .o_dout_vld (norm_vld)
             );
         end else begin : gen_no_normalize
             assign norm_dout  = comb_dout[N];
-            assign norm_valid = comb_valid[N];
+            assign norm_vld = comb_vld[N];
         end
     endgenerate
 
@@ -139,13 +139,13 @@ module cic_decimator_top #(
                 .i_clk      (i_clk),
                 .i_rst_n    (i_rst_n),
                 .i_din      (norm_dout),
-                .i_din_vld  (norm_valid),
+                .i_din_vld  (norm_vld),
                 .o_dout     (round_dout),
-                .o_dout_vld (round_valid)
+                .o_dout_vld (round_vld)
             );
         end else begin : gen_full
             assign round_dout  = ACTUAL_OUT_WIDTH'(norm_dout);
-            assign round_valid = norm_valid;
+            assign round_vld = norm_vld;
         end
     endgenerate
 
@@ -158,6 +158,6 @@ module cic_decimator_top #(
         end
     endgenerate
 
-    assign o_dout_tvalid = round_valid;
+    assign o_dout_vld = round_vld;
 
 endmodule

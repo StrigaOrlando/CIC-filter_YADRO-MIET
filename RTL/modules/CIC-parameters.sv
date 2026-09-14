@@ -12,7 +12,7 @@
 // количество бит, отбрасываемых при неполной выходной разрядности
 //=========================================
 
-package CIC_parameters;
+package cic_parameters_pkg;
 
     localparam IN_WIDTH = 10;
     localparam OUT_WIDTH = 10;
@@ -20,8 +20,8 @@ package CIC_parameters;
     localparam M = 1; // Задержка comb-секции (1 или 2)
     localparam R = 1; // Коэффициент децимации R ≤ 700
     
-    localparam bit FULL_OUT_WIDTH = 1'b0; // Полная/неполная выходная разрядность 1/0
-    localparam bit NORM_EN        = 1'b0; // Наличие/отсутствие нормировки 1/0
+    localparam bit OUTPUT_MODE    = 1'b0; // Полная/неполная выходная разрядность 1/0
+    localparam bit NORMALIZE      = 1'b0; // Наличие/отсутствие нормировки 1/0
     localparam bit PRUNING_EN     = 1'b0; // наличие/отсутствие Hogenauer pruning 1/0
     localparam bit STOPBAND_EXT   = 1'b0; // наличие/отсутствие расширения полосы задерживания 1/0
     
@@ -30,6 +30,7 @@ package CIC_parameters;
     
     localparam GAIN = calc_cic_gain(N, R, M);
     localparam FULL_WIDTH = calc_full_width(IN_WIDTH, N, R, M);
+    localparam NORMALIZE_RATIO = calc_normalize_ratio(N, R, M);
     
     // Расчет коэффициента усиления CIC - GAIN
     function automatic longint unsigned calc_cic_gain(
@@ -71,6 +72,17 @@ package CIC_parameters;
             return 0; // Ничего не отбрасываем
         else
             return full_width - out_width;
+    endfunction
+    
+    // Расчёт коэффициента нормировки
+    function automatic int calc_normalize_ratio(
+        input int n_stages, 
+        input int dec_ratio, 
+        input int diff_delay
+    );
+        longint unsigned gain;
+        gain = calc_cic_gain(n_stages, dec_ratio, diff_delay);
+        return 1/gain;
     endfunction
     
 endpackage

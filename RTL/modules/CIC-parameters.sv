@@ -14,23 +14,22 @@
 
 package cic_parameters_pkg;
 
-    localparam IN_WIDTH = 10;
-    localparam OUT_WIDTH = 10;
-    localparam N = 1; // Количество стадий CIC фильтра (от 2 до 6)
+    localparam IN_WIDTH  = 20;
+    localparam OUT_WIDTH = 20;
+    localparam N = 3; // Количество стадий CIC фильтра (от 2 до 6)
     localparam M = 1; // Задержка comb-секции (1 или 2)
-    localparam R = 1; // Коэффициент децимации R ≤ 700
+    localparam R = 8; // Коэффициент децимации R ≤ 700
     
-    localparam bit OUTPUT_MODE    = 1'b0; // Полная/неполная выходная разрядность 1/0
-    localparam bit NORMALIZE      = 1'b0; // Наличие/отсутствие нормировки 1/0
-    localparam bit PRUNING_EN     = 1'b0; // наличие/отсутствие Hogenauer pruning 1/0
-    localparam bit STOPBAND_EXT   = 1'b0; // наличие/отсутствие расширения полосы задерживания 1/0
+    localparam bit OUTPUT_MODE        = 1'b0; // Полная/неполная выходная разрядность 1/0
+    localparam bit NORMALIZE          = 1'b0; // Наличие/отсутствие нормировки 1/0
+    localparam bit PRUNING_EN         = 1'b0; // наличие/отсутствие Hogenauer pruning 1/0
+    localparam bit STOPBAND_EXT       = 1'b0; // наличие/отсутствие расширения полосы задерживания 1/0
     
-    localparam bit ROUNDE_MODE    = 1'b0; // ????????
-    localparam bit COMP_AFR       = 1'b0; // ????????
+    localparam logic [1:0] ROUND_MODE = 2'd0; // режимы округления для приведения разрядности, 0 - усечение, 1 - к +inf, 2 - к нулю
+    localparam bit COMP_AFR           = 1'b0; // ????????
     
     localparam GAIN = calc_cic_gain(N, R, M);
     localparam FULL_WIDTH = calc_full_width(IN_WIDTH, N, R, M);
-    localparam NORMALIZE_RATIO = calc_normalize_ratio(N, R, M);
     
     // Расчет коэффициента усиления CIC - GAIN
     function automatic longint unsigned calc_cic_gain(
@@ -72,17 +71,6 @@ package cic_parameters_pkg;
             return 0; // Ничего не отбрасываем
         else
             return full_width - out_width;
-    endfunction
-    
-    // Расчёт коэффициента нормировки
-    function automatic int calc_normalize_ratio(
-        input int n_stages, 
-        input int dec_ratio, 
-        input int diff_delay
-    );
-        longint unsigned gain;
-        gain = calc_cic_gain(n_stages, dec_ratio, diff_delay);
-        return 1/gain;
     endfunction
     
 endpackage

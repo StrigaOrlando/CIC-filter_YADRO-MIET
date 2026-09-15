@@ -1,9 +1,9 @@
-`timescale 1ns /1ps
+`timescale 1ns / 1ps
 
 module tb_cic_decimator;
 
     parameter IN_WIDTH   = cic_parameters_pkg::IN_WIDTH;
-    parameter OUT_WIDTH  = cic_parameters_pkg::FULL_WIDTH;
+    parameter OUT_WIDTH  = cic_parameters_pkg::OUT_WIDTH;
     parameter R          = cic_parameters_pkg::R;
     parameter M          = cic_parameters_pkg::M;
     parameter N          = cic_parameters_pkg::N;

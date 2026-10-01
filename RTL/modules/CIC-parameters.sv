@@ -1,76 +1,41 @@
-//===========================================
+// ============================================================================
 // В данном файле package есть 
+// Hogenauer accumulator pruning technique
 // --------------- ПАРАМЕТРЫ: ---------------
 // Ширина входных данных, ширина выходных данных [20:10],
 // количество стадий CIC фильтра, коэффициент децимации, задержка comb-секции,
 // ---------------- РЕЖИМЫ: -----------------
 // Выходной разрядности, округления, нормировки,
 // Hogenauer pruning, компенсации АЧХ, расширения полосы задерживания
-// ---------------- ФУНКЦИИ: ----------------
-// Коэффициент усиления CIC, прирост разрядности,
-// полная внутренняя/выходная разрядность, 
-// количество бит, отбрасываемых при неполной выходной разрядности
-//=========================================
+// ============================================================================
 
 package cic_parameters_pkg;
 
-    localparam IN_WIDTH  = 20;
-    localparam OUT_WIDTH = 20;
-    localparam N = 3; // Количество стадий CIC фильтра (от 2 до 6)
-    localparam M = 1; // Задержка comb-секции (1 или 2)
-    localparam R = 8; // Коэффициент децимации R ≤ 700
-    
+    localparam IN_WIDTH      = 12;
+    localparam OUT_WIDTH     = 12;
+    localparam N             = 3; // Количество стадий CIC фильтра (от 2 до 6)
+    localparam M             = 1; // Задержка comb-секции (1 или 2)
+    localparam R             = 8; // Коэффициент децимации R ≤ 700
+
     localparam bit OUTPUT_MODE        = 1'b0; // Полная/неполная выходная разрядность 1/0
     localparam bit NORMALIZE          = 1'b0; // Наличие/отсутствие нормировки 1/0
     localparam bit PRUNING_EN         = 1'b0; // наличие/отсутствие Hogenauer pruning 1/0
     localparam bit STOPBAND_EXT       = 1'b0; // наличие/отсутствие расширения полосы задерживания 1/0
-    
+
     localparam logic [1:0] ROUND_MODE = 2'd0; // режимы округления для приведения разрядности, 0 - усечение, 1 - к +inf, 2 - к нулю
     localparam bit COMP_AFR           = 1'b0; // ????????
-    
-    localparam GAIN = calc_cic_gain(N, R, M);
-    localparam FULL_WIDTH = calc_full_width(IN_WIDTH, N, R, M);
-    
-    // Расчет коэффициента усиления CIC - GAIN
-    function automatic longint unsigned calc_cic_gain(
-        input int n_stages, 
-        input int dec_ratio, 
-        input int diff_delay
-    );
-        return (dec_ratio * diff_delay) ** n_stages;
-    endfunction
-    
-    // Расчёт прироста разрядности (B_growth)
-    function automatic int calc_bit_growth(
-        input int n_stages, 
-        input int dec_ratio, 
-        input int diff_delay
-    );
-        longint unsigned gain;
-        gain = calc_cic_gain(n_stages, dec_ratio, diff_delay);
-        return $clog2(gain);
-    endfunction
 
-    // Расчёт полной внутренней/выходной разрядности - W_FULL
-    function automatic int calc_full_width(
-        input int in_width, 
-        input int n_stages, 
-        input int dec_ratio, 
-        input int diff_delay
-    );
-        return in_width + calc_bit_growth(n_stages, dec_ratio, diff_delay);
-    endfunction
+    localparam int STAGES       = 7;
+    localparam int BITS_GROWTH  = 9;
+    localparam int FULL_WIDTH   = 21;
+    localparam int TRUNC_BITS   = 9;
 
-    // Расчёт количества отбрасываемых бит при неполной выходной разрядности 
-    function automatic int calc_discarded_bits(
-        input int full_width, 
-        input int out_width, 
-        input bit full_out_width // Режим полной входной разрядности
-    );
-        if (full_out_width)
-            return 0; // Ничего не отбрасываем
-        else
-            return full_width - out_width;
-    endfunction
-    
+    // -----------------------------------------------------------
+    //   Bj[j]          - количество бит усекаемых на каждом каскаде j
+    //   AccumWidth[j]  - оставшееся кол-во бит на каскаде j
+    // -----------------------------------------------------------
+    localparam int Bj         [1:7] = '{0, 3, 4, 5, 6, 7, 9};
+    localparam int AccumWidth [1:7] = '{21, 18, 17, 16, 15, 14, 12};
+
+
 endpackage

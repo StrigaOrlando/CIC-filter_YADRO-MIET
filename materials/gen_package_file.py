@@ -26,7 +26,7 @@ _F_MANY_COMBS = [math.sqrt(comb(2 * n, n)) for n in range(1, 8)]
 
 
 # ---------------------------------------------------------------------------
-# Core calculation (same as before)
+# Core calculation
 # ---------------------------------------------------------------------------
 def cic_pruning(N: int, R: int, M: int, Bin: int, Bout: int):
     """

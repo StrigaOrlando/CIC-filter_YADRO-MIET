@@ -1,12 +1,13 @@
 module cic_decimator_top #(
-    parameter IN_WIDTH    = cic_parameters_pkg::IN_WIDTH   ,
-    parameter OUT_WIDTH   = cic_parameters_pkg::OUT_WIDTH  ,
-    parameter R           = cic_parameters_pkg::R          ,
-    parameter M           = cic_parameters_pkg::M          ,
-    parameter N           = cic_parameters_pkg::N          ,
-    parameter OUTPUT_MODE = cic_parameters_pkg::OUTPUT_MODE,
-    parameter ROUND_MODE  = cic_parameters_pkg::ROUND_MODE ,
-    parameter NORMALIZE   = cic_parameters_pkg::NORMALIZE  ,
+    parameter IN_WIDTH    = cic_parameters_pkg::IN_WIDTH             ,
+    parameter OUT_WIDTH   = cic_parameters_pkg::OUT_WIDTH            ,
+    parameter R           = cic_parameters_pkg::R                    ,
+    parameter M           = cic_parameters_pkg::M                    ,
+    parameter N           = cic_parameters_pkg::N                    ,
+    parameter OUTPUT_MODE = cic_parameters_pkg::OUTPUT_MODE          ,
+    parameter ROUND_MODE  = cic_parameters_pkg::ROUND_MODE           ,
+    parameter NORMALIZE   = cic_parameters_pkg::NORMALIZE            ,
+    parameter int PRE_NORM_WIDTH = cic_parameters_pkg::PRE_NORM_WIDTH,
     parameter TDATA_OUT_W =
     ((((OUTPUT_MODE == 0) ? OUT_WIDTH :
        (NORMALIZE ? IN_WIDTH :
@@ -29,35 +30,47 @@ module cic_decimator_top #(
 
     localparam GAIN       = cic_parameters_pkg::calc_cic_gain(N, R, M)            ;
 
+    // Опциональное уменьшение разрядности перед нормировкой
+    localparam int PRE_NORM_DATA_W =
+        (NORMALIZE && PRE_NORM_WIDTH > 0 && PRE_NORM_WIDTH <= FULL_WIDTH)
+        ? PRE_NORM_WIDTH : FULL_WIDTH;
+    localparam int PRE_NORM_SHIFT = FULL_WIDTH - PRE_NORM_DATA_W;
+
+    // Скорректированный коэффициент нормировки, только если мы уменьшали разрядность
+    localparam longint unsigned NORM_GAIN = GAIN >> PRE_NORM_SHIFT;
+
     // 1 - полная выходная разрядность
     // 0 - неполная выходная разрядность
     localparam EFFECTIVE_WIDTH = NORMALIZE ? (FULL_WIDTH - GROWTH_W) : FULL_WIDTH ;
     localparam ACTUAL_OUT_WIDTH = (OUTPUT_MODE == 0) ? OUT_WIDTH : EFFECTIVE_WIDTH;
 
-    localparam TDATA_IN_W  = ((IN_WIDTH  + 7) / 8) * 8    ;
+    localparam TDATA_IN_W  = ((IN_WIDTH  + 7) / 8) * 8        ;
 
-    logic signed [FULL_WIDTH-1:0] int_dout [0:N]          ;
-    logic                         int_vld [0:N]           ;
+    logic signed [FULL_WIDTH-1:0]       int_dout [0:N]        ;
+    logic                               int_vld [0:N]         ;
 
-    logic signed [FULL_WIDTH-1:0] dec_dout                ;
-    logic                         dec_vld                 ;
+    logic signed [FULL_WIDTH-1:0]       dec_dout              ;
+    logic                               dec_vld               ;
 
-    logic signed [FULL_WIDTH-1:0] comb_dout [0:N]         ;
-    logic                         comb_vld [0:N]          ;
+    logic signed [FULL_WIDTH-1:0]       comb_dout [0:N]       ;
+    logic                               comb_vld [0:N]        ;
 
-    logic signed [FULL_WIDTH-1:0] norm_dout               ;
-    logic                         norm_vld                ;
+    logic signed [PRE_NORM_DATA_W-1:0]  pre_norm_dout         ;
+    logic                               pre_norm_vld          ;
 
-    logic signed [ACTUAL_OUT_WIDTH-1:0] round_dout        ;
-    logic                               round_vld         ;
+    logic signed [PRE_NORM_DATA_W-1:0]  norm_dout             ;
+    logic                               norm_vld              ;
 
-    assign o_din_tready = 1'b1                            ;
+    logic signed [ACTUAL_OUT_WIDTH-1:0] round_dout            ;
+    logic                               round_vld             ;
 
-    logic signed [IN_WIDTH-1:0] din_data                  ;
-    assign din_data = IN_WIDTH'(i_din_tdata[IN_WIDTH-1:0]);
+    assign o_din_tready = 1'b1                                ;
 
-    assign int_dout[0] = din_data                         ;
-    assign int_vld[0]  = i_din_vld                        ;
+    logic signed [IN_WIDTH-1:0]         din_data              ;
+    assign din_data     = IN_WIDTH'(i_din_tdata[IN_WIDTH-1:0]);
+
+    assign int_dout[0] = din_data                             ;
+    assign int_vld[0]  = i_din_vld                            ;
 
     generate
         genvar i;
@@ -113,16 +126,36 @@ module cic_decimator_top #(
     endgenerate
 
     generate
+        if (NORMALIZE && PRE_NORM_SHIFT > 0) begin : gen_pre_normalize
+            cic_round #(
+                .IN_WIDTH   (FULL_WIDTH)     ,
+                .OUT_WIDTH  (PRE_NORM_DATA_W),
+                .ROUND_MODE (ROUND_MODE)
+            ) u_pre_round (
+                .clk          (i_clk)        ,
+                .rst_n        (i_rst_n)      ,
+                .i_din        (comb_dout[N]) ,
+                .i_din_valid  (comb_vld[N])  ,
+                .o_dout       (pre_norm_dout),
+                .o_dout_valid (pre_norm_vld)
+            );
+        end else begin : gen_no_pre_normalize
+            assign pre_norm_dout = comb_dout[N];
+            assign pre_norm_vld  = comb_vld[N] ;
+        end
+    endgenerate
+
+    generate
         if (NORMALIZE) begin : gen_normalize
             cic_normalize #(
-                .DATA_WIDTH (FULL_WIDTH),
-                .GAIN       (GAIN)
+                .DATA_WIDTH (PRE_NORM_DATA_W),
+                .GAIN       (NORM_GAIN)
             ) u_norm (
-                .clk          (i_clk)       ,
-                .rst_n        (i_rst_n)     ,
-                .i_din        (comb_dout[N]),
-                .i_din_valid  (comb_vld[N]) ,
-                .o_dout       (norm_dout)   ,
+                .clk          (i_clk)        ,
+                .rst_n        (i_rst_n)      ,
+                .i_din        (pre_norm_dout),
+                .i_din_valid  (pre_norm_vld) ,
+                .o_dout       (norm_dout)    ,
                 .o_dout_valid (norm_vld)
             );
         end else begin : gen_no_normalize
@@ -161,4 +194,20 @@ module cic_decimator_top #(
 
     assign o_dout_vld = round_vld;
 
+    // проверки, нужные с учётом условностей текущей реализации
+    //initial begin
+        //if (PRE_NORM_WIDTH < 0)
+            //$fatal(1, "PRE_NORM_WIDTH must be >= 0 (0 means full width)");
+        //if (NORMALIZE && PRE_NORM_WIDTH > FULL_WIDTH)
+            //$fatal(1, "PRE_NORM_WIDTH cannot exceed FULL_WIDTH");
+        //if (GAIN == 0 || GAIN[63])
+            //$fatal(1, "GAIN must be positive and fit a signed 64-bit divisor");
+        //if (NORMALIZE && PRE_NORM_DATA_W < IN_WIDTH)
+            //$fatal(1, "PRE_NORM_WIDTH below IN_WIDTH needs a scaler with separate input/output widths");
+        //if (NORMALIZE &&
+            //((NORM_GAIN == 0) || ((NORM_GAIN << PRE_NORM_SHIFT) != GAIN)))
+            //$fatal(1, "Inexact reduced gain: keep PRE_NORM_WIDTH=0 or implement rational scaling");
+        //if (TDATA_OUT_W < ACTUAL_OUT_WIDTH)
+            //$fatal(1, "TDATA_OUT_W must hold ACTUAL_OUT_WIDTH without truncation");
+    //end
 endmodule

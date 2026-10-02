@@ -37,5 +37,48 @@ package cic_parameters_pkg;
     localparam int Bj         [1:7] = '{0, 3, 4, 5, 6, 7, 9};
     localparam int AccumWidth [1:7] = '{21, 18, 17, 16, 15, 14, 12};
 
+    localparam int PRE_NORM_WIDTH = 0; // наличие/отсутствие предварительного уменьшения разрядности перед нормировкой, 0 - выключено, иначе требуемая ширина после последнего comb и перед нормировкой
+
+    // Расчёт коэффициента усиления CIC:
+    function automatic longint unsigned calc_cic_gain(
+        input int n_stages,
+        input int dec_ratio,
+        input int diff_delay
+    );
+        return (dec_ratio * diff_delay) ** n_stages;
+    endfunction
+
+    // Расчёт прироста разрядности:
+    function automatic int calc_bit_growth(
+        input int n_stages,
+        input int dec_ratio,
+        input int diff_delay
+    );
+        longint unsigned gain;
+        gain = calc_cic_gain(n_stages, dec_ratio, diff_delay);
+        return $clog2(gain);
+    endfunction
+
+    // Расчёт полной разрядности CIC без pruning.
+    function automatic int calc_full_width(
+        input int in_width,
+        input int n_stages,
+        input int dec_ratio,
+        input int diff_delay
+    );
+        return in_width + calc_bit_growth(n_stages, dec_ratio, diff_delay);
+    endfunction
+
+    // Расчёт количества отбрасываемых бит при неполной выходной разрядности.
+    function automatic int calc_discarded_bits(
+        input int full_width,
+        input int out_width,
+        input bit full_out_width
+    );
+        if (full_out_width)
+            return 0;
+        else
+            return full_width - out_width;
+    endfunction
 
 endpackage

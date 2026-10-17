@@ -1,17 +1,25 @@
 module cic_decimator_top #(
-    parameter IN_WIDTH    = cic_parameters_pkg::IN_WIDTH             ,
-    parameter OUT_WIDTH   = cic_parameters_pkg::OUT_WIDTH            ,
-    parameter R           = cic_parameters_pkg::R                    ,
-    parameter M           = cic_parameters_pkg::M                    ,
-    parameter N           = cic_parameters_pkg::N                    ,
-    parameter OUTPUT_MODE = cic_parameters_pkg::OUTPUT_MODE          ,
-    parameter ROUND_MODE  = cic_parameters_pkg::ROUND_MODE           ,
-    parameter NORMALIZE   = cic_parameters_pkg::NORMALIZE            ,
-    parameter int PRE_NORM_WIDTH = cic_parameters_pkg::PRE_NORM_WIDTH,
+    parameter IN_WIDTH    = cic_parameters_pkg::IN_WIDTH                         ,
+    parameter OUT_WIDTH   = cic_parameters_pkg::OUT_WIDTH                        ,
+    parameter R           = cic_parameters_pkg::R                                ,
+    parameter M           = cic_parameters_pkg::M                                ,
+    parameter N           = cic_parameters_pkg::N                                ,
+    parameter OUTPUT_MODE = cic_parameters_pkg::OUTPUT_MODE                      ,
+    parameter ROUND_MODE  = cic_parameters_pkg::ROUND_MODE                       ,
+    parameter NORMALIZE   = cic_parameters_pkg::NORMALIZE                        ,
+    parameter int PRE_NORM_WIDTH = cic_parameters_pkg::PRE_NORM_WIDTH            ,
+
+    parameter COMP_AFR    = cic_parameters_pkg::COMP_AFR                         ,
+    parameter int COMP_L  = cic_parameters_pkg::COMP_L                           ,
+    parameter int COMP_COEFF_FRAC_BITS = cic_parameters_pkg::COMP_COEFF_FRAC_BITS,
+    parameter int signed COMP_COEFF_Q [0:3] = cic_parameters_pkg::COMP_COEFF_Q   ,
+    parameter int COMP_GROWTH_W = cic_parameters_pkg::COMP_GROWTH_W              ,
+
     parameter TDATA_OUT_W =
-    ((((OUTPUT_MODE == 0) ? OUT_WIDTH :
-       (NORMALIZE ? IN_WIDTH :
-        cic_parameters_pkg::calc_full_width(IN_WIDTH, N, R, M))) + 7) / 8) * 8
+    (((((OUTPUT_MODE == 0) ? OUT_WIDTH :
+       ((NORMALIZE ? IN_WIDTH :
+        cic_parameters_pkg::calc_full_width(IN_WIDTH, N, R, M)) +
+        (COMP_AFR ? COMP_GROWTH_W : 0))) + 7) / 8) * 8)
 ) (
     input  logic                           i_clk        ,
     input  logic                           i_rst_n      ,
@@ -41,8 +49,13 @@ module cic_decimator_top #(
 
     // 1 - полная выходная разрядность
     // 0 - неполная выходная разрядность
-    localparam EFFECTIVE_WIDTH = NORMALIZE ? (FULL_WIDTH - GROWTH_W) : FULL_WIDTH ;
-    localparam ACTUAL_OUT_WIDTH = (OUTPUT_MODE == 0) ? OUT_WIDTH : EFFECTIVE_WIDTH;
+    localparam EFFECTIVE_WIDTH = NORMALIZE ? (FULL_WIDTH - GROWTH_W) : FULL_WIDTH;
+
+    // КИХ-компенсатор включается после нормировки и до финального приведения выходной разрядности
+    localparam int COMP_OUT_WIDTH  = EFFECTIVE_WIDTH + COMP_GROWTH_W              ;
+    localparam int POST_COMP_WIDTH = COMP_AFR ? COMP_OUT_WIDTH : EFFECTIVE_WIDTH  ;
+
+    localparam ACTUAL_OUT_WIDTH = (OUTPUT_MODE == 0) ? OUT_WIDTH : POST_COMP_WIDTH;
 
     localparam TDATA_IN_W  = ((IN_WIDTH  + 7) / 8) * 8        ;
 
@@ -60,6 +73,11 @@ module cic_decimator_top #(
 
     logic signed [PRE_NORM_DATA_W-1:0]  norm_dout             ;
     logic                               norm_vld              ;
+
+    logic signed [POST_COMP_WIDTH-1:0]  comp_dout             ;
+    logic                               comp_vld              ;
+    
+    logic signed [EFFECTIVE_WIDTH-1:0] comp_effective_dout    ;
 
     logic signed [ACTUAL_OUT_WIDTH-1:0] round_dout            ;
     logic                               round_vld             ;
@@ -164,24 +182,50 @@ module cic_decimator_top #(
         end
     endgenerate
 
+    // КИХ компенсация
     generate
-        if (OUTPUT_MODE == 0) begin : gen_round
-            cic_round #(
-                .IN_WIDTH   (EFFECTIVE_WIDTH) ,
-                .OUT_WIDTH  (ACTUAL_OUT_WIDTH),
-                .ROUND_MODE (ROUND_MODE)
-            ) u_round (
+        if (COMP_AFR) begin : gen_fir_comp
+            cic_fir_comp #(
+                .IN_WIDTH        (EFFECTIVE_WIDTH)     ,
+                .OUT_WIDTH       (COMP_OUT_WIDTH)      ,
+                .L               (COMP_L)              ,
+                .COEFF_FRAC_BITS (COMP_COEFF_FRAC_BITS),
+                .COEFF_Q         (COMP_COEFF_Q)
+            ) u_fir_comp (
                 .clk          (i_clk)                         ,
                 .rst_n        (i_rst_n)                       ,
                 .i_din        (norm_dout[EFFECTIVE_WIDTH-1:0]),
                 .i_din_valid  (norm_vld)                      ,
-                .o_dout       (round_dout)                    ,
-                .o_dout_valid (round_vld)
+                .o_dout       (comp_dout)                     ,
+                .o_dout_valid (comp_vld)
             );
-        end else begin : gen_full
-            assign round_dout = ACTUAL_OUT_WIDTH'(norm_dout);
-            assign round_vld  = norm_vld                    ;
+        end else begin : gen_no_fir_comp
+            assign comp_dout = norm_dout[EFFECTIVE_WIDTH-1:0];
+            assign comp_vld  = norm_vld;
         end
+    endgenerate
+    
+// Удаление добавленных бит без изменения числового масштаба, если значение не помещается в EFFECTIVE_WIDTH, действует wrap-around.
+    assign comp_effective_dout = comp_dout[EFFECTIVE_WIDTH-1:0];
+    
+    generate
+    if (OUTPUT_MODE == 0) begin : gen_round
+        cic_round #(
+            .IN_WIDTH   (EFFECTIVE_WIDTH),
+            .OUT_WIDTH  (ACTUAL_OUT_WIDTH),
+            .ROUND_MODE (ROUND_MODE)
+        ) u_round (
+            .clk          (i_clk)             ,
+            .rst_n        (i_rst_n)           ,
+            .i_din        (comp_effective_dout),
+            .i_din_valid  (comp_vld)          ,
+            .o_dout       (round_dout)        ,
+            .o_dout_valid (round_vld)
+        );
+    end else begin : gen_full
+        assign round_dout = ACTUAL_OUT_WIDTH'(comp_dout);
+        assign round_vld  = comp_vld;
+    end
     endgenerate
 
     generate

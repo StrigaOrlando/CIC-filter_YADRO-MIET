@@ -23,12 +23,20 @@ package cic_parameters_pkg;
     localparam bit STOPBAND_EXT       = 1'b0; // наличие/отсутствие расширения полосы задерживания 1/0
 
     localparam logic [1:0] ROUND_MODE = 2'd0; // режимы округления для приведения разрядности, 0 - усечение, 1 - к +inf, 2 - к нулю
-    localparam bit COMP_AFR           = 1'b0; // ????????
+    localparam bit COMP_AFR           = 1'b0; // наличие/отсутствие КИХ-компенсации АЧХ 1/0
 
-    localparam int STAGES       = 7;
-    localparam int BITS_GROWTH  = 9;
-    localparam int FULL_WIDTH   = 21;
-    localparam int TRUNC_BITS   = 9;
+    // Параметры КИХ-компенсатора
+    localparam int COMP_L               = 5; // Количество коэффициентов (отсчётов) КИХ-компенсатора, нечётное: 3, 5 или 7
+    localparam int COMP_COEFF_FRAC_BITS = 5; // Количество дробных бит для представления коэффициентов КИХ-компенсатора
+    localparam int signed COMP_COEFF_Q [0:3] = '{64, -16, 1, 0}; // Коэффициенты КИХ, умноженные на 2^COMP_COEFF_FRAC_BITS
+    
+    // Дополнительный рост выходной разрядности КИХ-компенсатора
+    localparam int COMP_GROWTH_W = 2; // Количество дополнительных старших guard-бит для предотвращения переполнения в КИХ
+
+    localparam int STAGES       = 7 ; // Общее количество стадий, учитываемых при расчёте прунинга (2*N + 1)
+    localparam int BITS_GROWTH  = 9 ; // Прирост разрядности CIC, обусловленный коэффициентом усиления (R*M)^N
+    localparam int FULL_WIDTH   = 21; // Полная внутренняя разрядность CIC без применения прунинга
+    localparam int TRUNC_BITS   = 9 ; // Общее количество бит, отбрасываемых при переходе от FULL_WIDTH к требуемой выходной ширине
 
     // -----------------------------------------------------------
     //   Bj[j]          - количество бит усекаемых на каждом каскаде j
@@ -59,7 +67,7 @@ package cic_parameters_pkg;
         return $clog2(gain);
     endfunction
 
-    // Расчёт полной разрядности CIC без pruning.
+    // Расчёт полной разрядности CIC без pruning
     function automatic int calc_full_width(
         input int in_width,
         input int n_stages,
@@ -69,7 +77,7 @@ package cic_parameters_pkg;
         return in_width + calc_bit_growth(n_stages, dec_ratio, diff_delay);
     endfunction
 
-    // Расчёт количества отбрасываемых бит при неполной выходной разрядности.
+    // Расчёт количества отбрасываемых бит при неполной выходной разрядности
     function automatic int calc_discarded_bits(
         input int full_width,
         input int out_width,

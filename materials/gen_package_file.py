@@ -1,5 +1,5 @@
 """
-gen_pkg_file.py
+gen_package_file.py
 
 The package contains:
     - Configuration parameters (N, R, M, Bin, Bout)
@@ -7,16 +7,17 @@ The package contains:
     - Arrays Bj[] and AccumWidth[] for all 2N+1 stages
 
 Usage from command line:
-    python gen_package_file.py --N 3 --R 8 --M 1 --Bin 12 --Bout 12
+    python gen_package_file.py --N 3 --R 8 --M 1 --Bin 12 --Bout 12 --OUTPUT_MODE False --NORMALIZE False --PRUNING_EN False --STOPBAND_EXT False --ROUND_MODE 1 --COMP_AFR False
 
 Usage as a module:
-    from cic_pkg_file import cic_pruning, generate_sv_package
+    from gen_package_file import cic_pruning, generate_sv_package
     generate_sv_package(N=3, R=8, M=1, Bin=12, Bout=12,
                         filename="pruning_pkg.sv")
 """
 
 import argparse
 import math
+import sys
 from math import comb
 from datetime import datetime
 
@@ -95,6 +96,8 @@ def cic_pruning(N: int, R: int, M: int, Bin: int, Bout: int):
 # SystemVerilog package generator
 # ---------------------------------------------------------------------------
 def generate_sv_package(N: int, R: int, M: int, Bin: int, Bout: int,
+                        mode1: bool = False, mode2: bool = False, mode3: bool = False,
+                        mode4: bool = False, mode5: int = 0, mode6: bool = False,
                         filename: str = "cic_parameters_pkg.sv",
                         package_name: str = "cic_parameters_pkg") -> str:
     """
@@ -114,6 +117,12 @@ def generate_sv_package(N: int, R: int, M: int, Bin: int, Bout: int,
     str
         The full text of the generated package (also written to file).
     """
+    # Keep CLI, interactive input, and module calls consistent.
+    mode1, mode2, mode3, mode4, mode6 = (
+        parse_bool(value) for value in (mode1, mode2, mode3, mode4, mode6)
+    )
+    if type(mode5) is not int or mode5 not in (0, 1, 2):
+        raise ValueError("ROUND_MODE must be an integer: 0, 1, or 2")
     results, bits_growth, full_bits, trunc_bits = cic_pruning(N, R, M, Bin, Bout)
 
     num_stages = 2 * N + 1
@@ -130,11 +139,15 @@ def generate_sv_package(N: int, R: int, M: int, Bin: int, Bout: int,
     w("// В данном файле package есть ")
     w("// Hogenauer accumulator pruning technique")
     w("// --------------- ПАРАМЕТРЫ: ---------------")
-    w("// Ширина входных данных, ширина выходных данных [20:10],")
+    w("// Ширина входных данных, ширина выходных данных [10:20],")
     w("// количество стадий CIC фильтра, коэффициент децимации, задержка comb-секции,")
     w("// ---------------- РЕЖИМЫ: -----------------")
     w("// Выходной разрядности, округления, нормировки,")
     w("// Hogenauer pruning, компенсации АЧХ, расширения полосы задерживания")
+    w("// ---------------- ФУНКЦИИ: ----------------")
+    w("// Коэффициент усиления CIC, прирост разрядности,")
+    w("// полная внутренняя/выходная разрядность, ")
+    w("// количество бит, отбрасываемых при неполной выходной разрядности")
     w("// ============================================================================")
     w("")
     w(f"package {package_name};")
@@ -145,13 +158,13 @@ def generate_sv_package(N: int, R: int, M: int, Bin: int, Bout: int,
     w(f"    localparam M             = {M}; // Задержка comb-секции (1 или 2)")
     w(f"    localparam R             = {R}; // Коэффициент децимации R ≤ 700")
     w("")
-    w("    localparam bit OUTPUT_MODE        = 1'b0; // Полная/неполная выходная разрядность 1/0")
-    w("    localparam bit NORMALIZE          = 1'b0; // Наличие/отсутствие нормировки 1/0")
-    w("    localparam bit PRUNING_EN         = 1'b0; // наличие/отсутствие Hogenauer pruning 1/0")
-    w("    localparam bit STOPBAND_EXT       = 1'b0; // наличие/отсутствие расширения полосы задерживания 1/0")
+    w(f"    localparam bit OUTPUT_MODE        = 1'b{int(mode1)}; // Полная/неполная выходная разрядность 1/0")
+    w(f"    localparam bit NORMALIZE          = 1'b{int(mode2)}; // Наличие/отсутствие нормировки 1/0")
+    w(f"    localparam bit PRUNING_EN         = 1'b{int(mode3)}; // наличие/отсутствие Hogenauer pruning 1/0")
+    w(f"    localparam bit STOPBAND_EXT       = 1'b{int(mode4)}; // наличие/отсутствие расширения полосы задерживания 1/0")
     w("")
-    w("    localparam logic [1:0] ROUND_MODE = 2'd0; // режимы округления для приведения разрядности, 0 - усечение, 1 - к +inf, 2 - к нулю")
-    w("    localparam bit COMP_AFR           = 1'b0; // ????????")
+    w(f"    localparam logic [1:0] ROUND_MODE = 2'd{mode5}; // режимы округления для приведения разрядности, 0 - усечение, 1 - к +inf, 2 - к нулю")
+    w(f"    localparam bit COMP_AFR           = 1'b{int(mode6)}; // ????????")
     w("")
     w(f"    localparam int STAGES       = {num_stages};")
     w(f"    localparam int BITS_GROWTH  = {bits_growth};")
@@ -159,18 +172,18 @@ def generate_sv_package(N: int, R: int, M: int, Bin: int, Bout: int,
     w(f"    localparam int TRUNC_BITS   = {trunc_bits};")
     w("")
 
-    # Arrays
-    w("    // -----------------------------------------------------------")
-    w("    //   Bj[j]          - количество бит усекаемых на каждом каскаде j")
-    w("    //   AccumWidth[j]  - оставшееся кол-во бит на каскаде j")
-    w("    // -----------------------------------------------------------")
-    bj_str    = ", ".join(str(v) for v in Bj_vec)
-    width_str = ", ".join(str(v) for v in width_vec)
-    w(f"    localparam int Bj         [1:{num_stages}] = '{{{bj_str}}};")
-    w(f"    localparam int AccumWidth [1:{num_stages}] = '{{{width_str}}};")
-    w("")
-    w("")
+    if mode3:
+        w("    // -----------------------------------------------------------")
+        w("    //   Bj[j]          - количество бит усекаемых на каждом каскаде j")
+        w("    //   AccumWidth[j]  - оставшееся кол-во бит на каскаде j")
+        w("    // -----------------------------------------------------------")
+        bj_str    = ", ".join(str(v) for v in Bj_vec)
+        width_str = ", ".join(str(v) for v in width_vec)
+        w(f"    localparam int Bj         [1:{num_stages}] = '{{{bj_str}}};")
+        w(f"    localparam int AccumWidth [1:{num_stages}] = '{{{width_str}}};")
+        w("")
 
+    w("")
     w("endpackage")
 
     text = "\n".join(lines) + "\n"
@@ -188,23 +201,123 @@ def generate_sv_package(N: int, R: int, M: int, Bin: int, Bout: int,
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
-def main():
+
+BOOL_MODES = ("OUTPUT_MODE", "NORMALIZE", "PRUNING", "STOPBAND_EXT", "COMP_AFR")
+PARAMETERS = {
+    "N": (3, 2, 6),
+    "R": (8, 2, 8192),
+    "M": (1, 1, 2),
+    "Bin": (12, 2, 20),
+    "Bout": (12, 2, 20),
+}
+
+
+def parse_bool(value):
+    """Convert explicit boolean values without bool('False') surprises."""
+    if isinstance(value, bool):
+        return value
+    raw = str(value).strip().lower()
+    if raw in ("true", "t", "1", "yes", "y"):
+        return True
+    if raw in ("false", "f", "0", "no", "n"):
+        return False
+    raise argparse.ArgumentTypeError("Expected True/False, 1/0, or yes/no")
+
+
+def build_parser():
     parser = argparse.ArgumentParser(
         description="Generate SystemVerilog package with CIC Hogenauer pruning parameters."
     )
-    parser.add_argument("--N",    type=int, required=True, help="Number of CIC stages")
-    parser.add_argument("--R",    type=int, required=True, help="Decimation factor")
-    parser.add_argument("--M",    type=int, default=1,     help="Differential delay (default 1)")
-    parser.add_argument("--Bin",  type=int, required=True, help="Input word width")
-    parser.add_argument("--Bout", type=int, required=True, help="Output word width")
-    parser.add_argument("--out",  type=str, default="cic_parameters_pkg.sv",
-                        help="Output SystemVerilog file name")
-    parser.add_argument("--pkg",  type=str, default="cic_parameters_pkg",
-                        help="SystemVerilog package name")
-    args = parser.parse_args()
+    for name, (default, minimum, maximum) in PARAMETERS.items():
+        parser.add_argument(f"--{name}", type=int, default=None,
+                            help=f"Range: {minimum}..{maximum}; interactive default: {default}")
+    for name in BOOL_MODES:
+        flags = [f"--{name}"]
+        if name == "PRUNING":
+            flags.append("--PRUNING_EN")
+        parser.add_argument(*flags, type=parse_bool, nargs="?", const=True,
+                            default=None, metavar="True|False",
+                            help="Default: False; a flag without a value enables the mode")
+    parser.add_argument("--ROUND_MODE", type=int, choices=(0, 1, 2), default=None,
+                        help="0: truncate; 1: toward +inf; 2: toward zero (default: 0)")
+    parser.add_argument("--out", default="cic_parameters_pkg.sv", help="Output file")
+    parser.add_argument("--pkg", default="cic_parameters_pkg", help="SystemVerilog package name")
+    parser.add_argument("--interactive", action="store_true",
+                        help="Prompt for missing parameters and modes")
+    return parser
 
+
+def ask_int(prompt, default=None, min_val=None, max_val=None):
+    suffix = f" [{default}]" if default is not None else ""
+    while True:
+        raw = input(f"{prompt}{suffix}: ").strip()
+        try:
+            value = default if raw == "" and default is not None else int(raw)
+        except ValueError:
+            print("Please enter an integer.")
+            continue
+        if min_val is not None and value < min_val:
+            print(f"Value must be >= {min_val}.")
+            continue
+        if max_val is not None and value > max_val:
+            print(f"Value must be <= {max_val}.")
+            continue
+        return value
+
+
+def ask_mode(prompt, default=False):
+    while True:
+        raw = input(f"{prompt} [{default}]: ").strip()
+        if raw == "":
+            return parse_bool(default)
+        try:
+            return parse_bool(raw)
+        except argparse.ArgumentTypeError as exc:
+            print(exc)
+
+
+def fill_missing_interactively(args):
+    needs_prompt = args.interactive or any(
+        getattr(args, name) is None for name in PARAMETERS
+    )
+    if needs_prompt:
+        print("=== CIC pruning package generator ===")
+        print("Press Enter to accept the default value in brackets.")
+        for name, (default, minimum, maximum) in PARAMETERS.items():
+            if getattr(args, name) is None:
+                setattr(args, name, ask_int(name, default, minimum, maximum))
+        missing_modes = any(getattr(args, name) is None
+                            for name in (*BOOL_MODES, "ROUND_MODE"))
+        if missing_modes and ask_mode("Configure unspecified modes?", default=False):
+            for name in BOOL_MODES:
+                if getattr(args, name) is None:
+                    setattr(args, name, ask_mode(f"{name} (True/False)"))
+            if args.ROUND_MODE is None:
+                args.ROUND_MODE = ask_int("ROUND_MODE (0/1/2)", 0, 0, 2)
+    for name in BOOL_MODES:
+        if getattr(args, name) is None:
+            setattr(args, name, False)
+    if args.ROUND_MODE is None:
+        args.ROUND_MODE = 0
+    return args
+
+
+def main():
+    parser = build_parser()
+    args = parser.parse_args()
+    # Check explicitly supplied parameters before starting any prompts.
+    for name, (_, minimum, maximum) in PARAMETERS.items():
+        value = getattr(args, name)
+        if value is not None and not minimum <= value <= maximum:
+            parser.error(f"--{name} must be in {minimum}..{maximum}")
+    args = fill_missing_interactively(args)
+    print(f"N={args.N}, R={args.R}, M={args.M}, Bin={args.Bin}, Bout={args.Bout}")
+    for name in (*BOOL_MODES, "ROUND_MODE"):
+        print(f"{name} = {getattr(args, name)}")
     generate_sv_package(
         N=args.N, R=args.R, M=args.M, Bin=args.Bin, Bout=args.Bout,
+        mode1=args.OUTPUT_MODE, mode2=args.NORMALIZE, mode3=args.PRUNING,
+        mode4=args.STOPBAND_EXT, mode5=args.ROUND_MODE, mode6=args.COMP_AFR,
         filename=args.out, package_name=args.pkg,
     )
 

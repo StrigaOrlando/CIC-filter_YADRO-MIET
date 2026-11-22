@@ -1,25 +1,26 @@
-//`timescale 1ns/1ps
-
 module cic_fir_comp #(
-    parameter int IN_WIDTH        = 16,
-    parameter int OUT_WIDTH       = 24,
-    parameter int L               = 7,
-    parameter int COEFF_FRAC_BITS = 7,
-    parameter int signed COEFF_Q [0:3] = '{256, -64, 1, 4}
+    parameter int IN_WIDTH             = 16               ,
+    parameter int OUT_WIDTH            = 24               ,
+    parameter int L                    = 7                ,
+    parameter int COEFF_FRAC_BITS      = 7                ,
+    parameter int signed COEFF_Q [0:3] = '{256, -64, 1, 4},
+    parameter int NUM_CHANNELS         = 1                ,
+    parameter int TID_WIDTH            = (NUM_CHANNELS <= 1) ? 1 : $clog2(NUM_CHANNELS)
 ) (
-    input  logic                             clk,
-    input  logic                             rst_n,
+    input  logic                            clk          ,
+    input  logic                            rst_n        ,
 
-    input  logic signed [IN_WIDTH  - 1 : 0] i_din,
-    input  logic                             i_din_valid,
+    input  logic signed [IN_WIDTH  - 1 : 0] i_din        ,
+    input  logic                            i_din_valid  ,
+    input  logic        [TID_WIDTH - 1 : 0] i_tid        ,
 
-    output logic signed [OUT_WIDTH - 1 : 0] o_dout,
-    output logic                             o_dout_valid
+    output logic signed [OUT_WIDTH - 1 : 0] o_dout       ,
+    output logic                            o_dout_valid
 );
 
-    localparam int HALF_TAPS = (L - 1) / 2;   // Количество пар симметричных отсчётов
+    localparam int HALF_TAPS = (L - 1) / 2  ; // Количество пар симметричных отсчётов
     localparam int N_TERMS   = HALF_TAPS + 1; // Количество независимых коэффициентов
-    localparam int SYM_WIDTH = IN_WIDTH + 1;  // Разрядность суммы пары отсчётов
+    localparam int SYM_WIDTH = IN_WIDTH + 1 ; // Разрядность суммы пары отсчётов
 
 // Максимальный сдвиг среди коэффициентов
     function automatic int calc_max_coeff_shift;
@@ -37,36 +38,41 @@ module cic_fir_comp #(
     endfunction
 
     localparam int MAX_COEFF_SHIFT = calc_max_coeff_shift();
-    localparam int ACC_WIDTH = SYM_WIDTH + MAX_COEFF_SHIFT + $clog2(N_TERMS) + 1; // Внутренняя разрядность КИХ
+    localparam int ACC_WIDTH       = SYM_WIDTH + MAX_COEFF_SHIFT + $clog2(N_TERMS) + 1; // Внутренняя разрядность КИХ
 
-    logic signed [IN_WIDTH  - 1 : 0] delay_q_ff [0:L-2];
-    logic signed [IN_WIDTH  - 1 : 0] fir_window [0:L-1];
-    logic signed [SYM_WIDTH - 1 : 0] sym_data [0:HALF_TAPS];
-    logic signed [ACC_WIDTH - 1 : 0] coeff_term [0:HALF_TAPS];
-    logic signed [ACC_WIDTH - 1 : 0] sum_stage [0:HALF_TAPS];
-    logic signed [ACC_WIDTH - 1 : 0] scaled_sum;
-    logic signed [OUT_WIDTH - 1 : 0] resized_sum;
+    // Отдельная линия задержки КИХ для каждого TID
+    logic signed [IN_WIDTH  - 1 : 0] delay_q_ff [0:NUM_CHANNELS-1][0:L-2];
+    logic signed [IN_WIDTH  - 1 : 0] fir_window [0:L-1]                  ;
+    logic signed [SYM_WIDTH - 1 : 0] sym_data [0:HALF_TAPS]              ;
+    logic signed [ACC_WIDTH - 1 : 0] coeff_term [0:HALF_TAPS]            ;
+    logic signed [ACC_WIDTH - 1 : 0] sum_stage [0:HALF_TAPS]             ;
+    logic signed [ACC_WIDTH - 1 : 0] scaled_sum                          ;
+    logic signed [OUT_WIDTH - 1 : 0] resized_sum                         ;
+    logic [TID_WIDTH - 1 : 0] state_tid                                  ;
 
 // Линия задержки входных отсчётов
+    assign state_tid = (NUM_CHANNELS <= 1) ? '0 : i_tid;
+
     always_ff @(posedge clk, negedge rst_n) begin
         if (~rst_n) begin
-            for (int i = 0; i < L - 1; i = i + 1)
-                delay_q_ff[i] <= '0;
+            for (int c = 0; c < NUM_CHANNELS; c = c + 1)
+                for (int i = 0; i < L - 1; i = i + 1)
+                    delay_q_ff[c][i] <= '0;
         end
         else if (i_din_valid) begin
-            delay_q_ff[0] <= i_din;
+            delay_q_ff[state_tid][0] <= i_din;
 
             for (int i = 1; i < L - 1; i = i + 1)
-                delay_q_ff[i] <= delay_q_ff[i - 1];
+                delay_q_ff[state_tid][i] <= delay_q_ff[state_tid][i - 1];
         end
     end
 
-// Окно отсчётов КИХ
+// Окно отсчётов КИХ для текущего TID
     assign fir_window[0] = i_din;
 
     generate
         for (genvar i = 1; i < L; i = i + 1) begin : gen_fir_window
-            assign fir_window[i] = delay_q_ff[i - 1];
+            assign fir_window[i] = delay_q_ff[state_tid][i - 1];
         end
     endgenerate
 
@@ -87,9 +93,9 @@ module cic_fir_comp #(
 // Умножение на коэффициенты вида 0 или +/-2^k
     generate
         for (genvar k = 0; k <= HALF_TAPS; k = k + 1) begin : gen_coeff
-            localparam int signed COEFF_VALUE = COEFF_Q[k];
-            localparam int ABS_COEFF = (COEFF_VALUE < 0) ? -COEFF_VALUE : COEFF_VALUE;
-            localparam int COEFF_SHIFT = (ABS_COEFF <= 1) ? 0 : $clog2(ABS_COEFF);
+            localparam int signed COEFF_VALUE = COEFF_Q[k]                                    ;
+            localparam int ABS_COEFF          = (COEFF_VALUE < 0) ? -COEFF_VALUE : COEFF_VALUE;
+            localparam int COEFF_SHIFT        = (ABS_COEFF <= 1) ? 0 : $clog2(ABS_COEFF)      ;
 
             logic signed [ACC_WIDTH - 1 : 0] sym_data_ext;
 
@@ -117,13 +123,12 @@ module cic_fir_comp #(
     assign scaled_sum = $signed(sum_stage[HALF_TAPS]) >>> COEFF_FRAC_BITS;
 
 // Приведение к выходгой разрядности
-// при уменьшении удаляются добавленные старшие биты, если не хватает, wrap-around, при увеличении знаковое расширение
     assign resized_sum = $signed(scaled_sum);
 
 // Запись выхода
     always_ff @(posedge clk, negedge rst_n) begin
         if (~rst_n) begin
-            o_dout       <= '0;
+            o_dout       <= '0  ;
             o_dout_valid <= 1'b0;
         end
         else begin

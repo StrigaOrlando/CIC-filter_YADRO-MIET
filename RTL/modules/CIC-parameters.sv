@@ -18,18 +18,27 @@ package cic_parameters_pkg;
     localparam R             = 8; // Коэффициент децимации R ≤ 700
 
     localparam bit OUTPUT_MODE        = 1'b0; // Полная/неполная выходная разрядность 1/0
-    localparam bit NORMALIZE          = 1'b0; // Наличие/отсутствие нормировки 1/0
-    localparam bit PRUNING_EN         = 1'b0; // наличие/отсутствие Hogenauer pruning 1/0
+    localparam bit NORMALIZE          = 1'b1; // Наличие/отсутствие нормировки 1/0
+    localparam bit PRUNING_EN         = 1'b1; // наличие/отсутствие Hogenauer pruning 1/0
     localparam bit STOPBAND_EXT       = 1'b0; // наличие/отсутствие расширения полосы задерживания 1/0
 
     localparam logic [1:0] ROUND_MODE = 2'd0; // режимы округления для приведения разрядности, 0 - усечение, 1 - к +inf, 2 - к нулю
-    localparam bit COMP_AFR           = 1'b0; // наличие/отсутствие КИХ-компенсации АЧХ 1/0
+    localparam bit COMP_AFR           = 1'b1; // наличие/отсутствие КИХ-компенсации АЧХ 1/0
+    
+    localparam int PRE_NORM_WIDTH = 0; // наличие/отсутствие предварительного уменьшения разрядности перед нормировкой, 0 - выключено, иначе требуемая ширина после последнего comb и перед нормировкой
+
+    // Параметры многоканальной обработки
+    localparam int NUM_CHANNELS       = 4; // Количество независимых логических потоков
+    localparam int CHANNEL_FIFO_DEPTH = 16; // Глубина входной FIFO каждого канала
+    localparam bit LOAD_AWARE_ARB     = 1'b1; // сложность арбитра, 0 - простой(с0-с1-с2-с3-с0...), 1 - сложный
+    localparam int ARB_AGE_LIMIT      = 32; // После этого времени ожидания канал получает приоритет
+    localparam int ARB_HIGH_WATERMARK = 12; // При достижении уровня учитывается максимальная заполненность FIFO
 
     // Параметры КИХ-компенсатора
     localparam int COMP_L               = 5; // Количество коэффициентов (отсчётов) КИХ-компенсатора, нечётное: 3, 5 или 7
     localparam int COMP_COEFF_FRAC_BITS = 5; // Количество дробных бит для представления коэффициентов КИХ-компенсатора
     localparam int signed COMP_COEFF_Q [0:3] = '{64, -16, 1, 0}; // Коэффициенты КИХ, умноженные на 2^COMP_COEFF_FRAC_BITS
-    
+
     // Дополнительный рост выходной разрядности КИХ-компенсатора
     localparam int COMP_GROWTH_W = 2; // Количество дополнительных старших guard-бит для предотвращения переполнения в КИХ
 
@@ -45,7 +54,12 @@ package cic_parameters_pkg;
     localparam int Bj         [1:7] = '{0, 3, 4, 5, 6, 7, 9};
     localparam int AccumWidth [1:7] = '{21, 18, 17, 16, 15, 14, 12};
 
-    localparam int PRE_NORM_WIDTH = 0; // наличие/отсутствие предварительного уменьшения разрядности перед нормировкой, 0 - выключено, иначе требуемая ширина после последнего comb и перед нормировкой
+    // Параметры нормировки
+    localparam int NORM_FRAC_BITS = 20; // Параметр F, позволяет задавать точность представления, в дальнейшем на него делается поправка
+    localparam int NORM_CSD_TERM_COUNT = 1; // Количество коэффициентов в CSD
+    localparam int NORM_CSD_SHIFT [0:NORM_CSD_TERM_COUNT-1] = '{18}; // Коэффициенты CSD
+    localparam bit NORM_CSD_NEGATIVE [0:NORM_CSD_TERM_COUNT-1] = '{0}; // Знаки при слагаемых в CSD, 0 - "+", 1 - "-"
+
 
     // Расчёт коэффициента усиления CIC:
     function automatic longint unsigned calc_cic_gain(
@@ -75,18 +89,6 @@ package cic_parameters_pkg;
         input int diff_delay
     );
         return in_width + calc_bit_growth(n_stages, dec_ratio, diff_delay);
-    endfunction
-
-    // Расчёт количества отбрасываемых бит при неполной выходной разрядности
-    function automatic int calc_discarded_bits(
-        input int full_width,
-        input int out_width,
-        input bit full_out_width
-    );
-        if (full_out_width)
-            return 0;
-        else
-            return full_width - out_width;
     endfunction
 
 endpackage

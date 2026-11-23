@@ -25,7 +25,7 @@ module cic_decimator_top #(
     parameter int TDATA_OUT_W       =
       (((((OUTPUT_MODE == 0) ? OUT_WIDTH :
           ((NORMALIZE ? IN_WIDTH :
-            cic_parameters_pkg::calc_full_width(IN_WIDTH,N,R,M)) +
+            cic_parameters_pkg::FULL_WIDTH) +
            (COMP_AFR ? COMP_GROWTH_W : 0))) + 7) / 8) * 8)
 ) (
     input  logic                          i_clk         ,
@@ -45,13 +45,13 @@ module cic_decimator_top #(
         return cic_parameters_pkg::Bj[j];
     endfunction
 
-    localparam int FULL_WIDTH      = cic_parameters_pkg::calc_full_width(IN_WIDTH,N,R,M);
-    localparam int S_PRUNE         = stage_prune(2*N)                                   ;
-    localparam int COMB_LAST_W     = FULL_WIDTH - S_PRUNE                               ;
+    localparam int FULL_WIDTH = cic_parameters_pkg::FULL_WIDTH;
+    localparam int S_PRUNE         = stage_prune(2*N)         ;
+    localparam int COMB_LAST_W     = FULL_WIDTH - S_PRUNE     ;
     localparam int PRE_NORM_DATA_W =
         (NORMALIZE && PRE_NORM_WIDTH > 0 && PRE_NORM_WIDTH < COMB_LAST_W)
         ? PRE_NORM_WIDTH : COMB_LAST_W;
-    localparam int S_PRE = COMB_LAST_W - PRE_NORM_DATA_W                                ;
+    localparam int S_PRE = COMB_LAST_W - PRE_NORM_DATA_W      ;
 
     localparam int EFFECTIVE_WIDTH  = NORMALIZE ? IN_WIDTH : FULL_WIDTH               ;
     localparam int COMP_OUT_WIDTH   = EFFECTIVE_WIDTH + COMP_GROWTH_W                 ;

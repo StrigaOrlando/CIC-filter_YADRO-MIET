@@ -232,14 +232,13 @@ module cic_multichannel_top #(
     parameter int HIGH_WATERMARK = cic_parameters_pkg::ARB_HIGH_WATERMARK        ,
 
     parameter int TDATA_OUT_W =
-    (((((cic_parameters_pkg::OUTPUT_MODE == 0) ? cic_parameters_pkg::OUT_WIDTH :
-       ((cic_parameters_pkg::NORMALIZE ? cic_parameters_pkg::IN_WIDTH :
-        cic_parameters_pkg::calc_full_width(
-            cic_parameters_pkg::IN_WIDTH,
-            cic_parameters_pkg::N,
-            cic_parameters_pkg::R,
-            cic_parameters_pkg::M)) +
-        (cic_parameters_pkg::COMP_AFR ? cic_parameters_pkg::COMP_GROWTH_W : 0))) + 7) / 8) * 8)
+        (((cic_parameters_pkg::OUTPUT_MODE == 0
+            ? cic_parameters_pkg::OUT_WIDTH
+            : ((cic_parameters_pkg::NORMALIZE
+                ? cic_parameters_pkg::IN_WIDTH
+                : cic_parameters_pkg::FULL_WIDTH)
+               + (cic_parameters_pkg::COMP_AFR
+                   ? cic_parameters_pkg::COMP_GROWTH_W : 0))) + 7) / 8) * 8
 ) (
     input  logic                                              i_clk        ,
     input  logic                                              i_rst_n      ,

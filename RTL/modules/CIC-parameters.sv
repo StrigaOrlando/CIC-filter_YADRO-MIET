@@ -60,35 +60,4 @@ package cic_parameters_pkg;
     localparam int NORM_CSD_SHIFT [0:NORM_CSD_TERM_COUNT-1] = '{18}; // Коэффициенты CSD
     localparam bit NORM_CSD_NEGATIVE [0:NORM_CSD_TERM_COUNT-1] = '{0}; // Знаки при слагаемых в CSD, 0 - "+", 1 - "-"
 
-
-    // Расчёт коэффициента усиления CIC:
-    function automatic longint unsigned calc_cic_gain(
-        input int n_stages,
-        input int dec_ratio,
-        input int diff_delay
-    );
-        return (dec_ratio * diff_delay) ** n_stages;
-    endfunction
-
-    // Расчёт прироста разрядности:
-    function automatic int calc_bit_growth(
-        input int n_stages,
-        input int dec_ratio,
-        input int diff_delay
-    );
-        longint unsigned gain;
-        gain = calc_cic_gain(n_stages, dec_ratio, diff_delay);
-        return $clog2(gain);
-    endfunction
-
-    // Расчёт полной разрядности CIC без pruning
-    function automatic int calc_full_width(
-        input int in_width,
-        input int n_stages,
-        input int dec_ratio,
-        input int diff_delay
-    );
-        return in_width + calc_bit_growth(n_stages, dec_ratio, diff_delay);
-    endfunction
-
 endpackage

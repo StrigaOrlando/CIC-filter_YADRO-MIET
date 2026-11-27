@@ -19,17 +19,15 @@ module cic_comb #(
 );
     localparam int FULL_SCALE_W = ((IN_WIDTH + IN_SCALE) > (OUT_WIDTH + OUT_SCALE))
                                 ? (IN_WIDTH + IN_SCALE) : (OUT_WIDTH + OUT_SCALE);
-    logic signed [IN_WIDTH-1:0] delay_q_ff [0:NUM_CHANNELS-1][0:M-1]             ;
-    logic signed [FULL_SCALE_W-1:0] in_full, delay_full, diff_full               ;
-    logic signed [FULL_SCALE_W-1:0] in_ext, delay_ext                            ;
+    logic signed [OUT_WIDTH-1:0] delay_q_ff [0:NUM_CHANNELS-1][0:M-1];
+    logic signed [FULL_SCALE_W-1:0] in_ext, in_full                  ;
+    logic signed [OUT_WIDTH-1:0] din_aligned                         ;
 
-    assign in_ext = $signed(i_din)                        ;
-    assign delay_ext = $signed(delay_q_ff[state_tid][M-1]);
-    assign in_full = in_ext <<< IN_SCALE                  ;
-    assign delay_full = delay_ext <<< IN_SCALE            ;
-    assign diff_full = in_full - delay_full               ;
-    logic signed [OUT_WIDTH - 1 : 0] dout_ff              ;
-    logic signed [OUT_WIDTH - 1 : 0] dout_next            ;
+    assign in_ext = $signed(i_din)                     ;
+    assign in_full = in_ext <<< IN_SCALE               ;
+    assign din_aligned = $signed(in_full) >>> OUT_SCALE;
+    logic signed [OUT_WIDTH - 1 : 0] dout_ff           ;
+    logic signed [OUT_WIDTH - 1 : 0] dout_next         ;
 
     logic dout_valid_ff                ;
     logic dout_valid_next              ;
@@ -45,7 +43,7 @@ module cic_comb #(
                 for (int i = 0; i < M; i = i + 1)
                     delay_q_ff[c][i] <= '0;
         end else if (i_din_valid) begin
-            delay_q_ff[state_tid][0] <= i_din;
+            delay_q_ff[state_tid][0] <= din_aligned;
 
             for (int i = 1; i < M; i = i + 1)
                 delay_q_ff[state_tid][i] <= delay_q_ff[state_tid][i - 1];
@@ -54,8 +52,8 @@ module cic_comb #(
 
 //--------------------------------------------------------------------------
 // dout management
-    assign dout_next       = $signed(diff_full) >>> OUT_SCALE;
-    assign dout_valid_next = i_din_valid                     ;
+    assign dout_next       = din_aligned - delay_q_ff[state_tid][M-1];
+    assign dout_valid_next = i_din_valid                             ;
 
     always_ff @(posedge clk, negedge rst_n) begin
         if (~rst_n) begin

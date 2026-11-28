@@ -6,10 +6,22 @@ gen_package_file.py
     - Количество каскадов (2N+1)
     - Массивы Bj[] и AccumWidth[] для всех 2N+1 каскадов
     - Коэффициенты КИХ-компенсатора, рассчитанные по алгоритму из ciccomp.m
+    - Параметры нормировки, полученные вызовом исходной csd_divider.m в MATLAB
 
 Запуск из командной строки:
     python gen_package_file.py --N 3 --R 8 --M 1 --Bin 12 --Bout 12
     python gen_package_file.py --N 3 --R 32 --M 1 --Bin 12 --Bout 12 --COMP_L 5 --COMP_B 12 --COMP_WP_PI 0.5
+
+Для генерации при включённой нормировке требуется установленный MATLAB. Файл csd_divider.m разместите
+рядом с этим скриптом либо укажите --csd-file. Если MATLAB не найден автоматически,
+укажите --matlab-exe. Дополнительные пакеты Python не требуются.
+
+Для нормировки S = S_prune + S_pre, где S_prune = Bj[2*N] при включённом прунинге, иначе S_prune = 0.
+S_pre это количество младших разрядов, дополнительно отбрасываемых согласно PRE_NORM_WIDTH.
+В MATLAB передаётся D = (R*M)^N / 2^S: функция представляет обратную величину 1/D.
+NORM_CSD_SHIFT содержит powers с прибавлением fracBits:
+1/D ~= sum((-1)^NORM_CSD_NEGATIVE[j] * 2^NORM_CSD_SHIFT[j]) / 2^NORM_FRAC_BITS.
+Четыре параметра выводятся независимо от флага NORMALIZE.
 
 Использование в качестве модуля:
     from gen_package_file import cic_pruning, generate_sv_package
@@ -20,6 +32,13 @@ gen_package_file.py
 import argparse
 import math
 import sys
+import json
+import os
+import shutil
+import subprocess
+import tempfile
+import uuid
+from pathlib import Path
 from math import comb
 from datetime import datetime
 from itertools import product
@@ -72,7 +91,7 @@ def cic_pruning(N: int, R: int, M: int, Bin: int, Bout: int):
     cic_gain     = (R * M) ** N
     bits_growth  = math.ceil(math.log2(cic_gain))
     full_bits    = bits_growth + Bin
-    trunc_bits   = full_bits - Bout
+    trunc_bits = max(0, full_bits - Bout)
 
     noise_var         = (2 ** trunc_bits) ** 2 / 12.0
     noise_std         = math.sqrt(noise_var)
@@ -80,8 +99,8 @@ def cic_pruning(N: int, R: int, M: int, Bin: int, Bout: int):
     half_log_6_over_N = 0.5 * math.log2(6.0 / N)
 
     Bj = [
-        math.floor(minus_log2_F[i] + log2_noise_std + half_log_6_over_N)
-        for i in range(2 * N)
+    max(0, math.floor(minus_log2_F[i] + log2_noise_std + half_log_6_over_N))
+    for i in range(2 * N)
     ]
 
     results = []
@@ -177,6 +196,92 @@ def compensation_parameters(N: int, R: int, L: int = 5, B: int = 12,
 
 
 # ---------------------------------------------------------------------------
+# Вызов исходной MATLAB-функции нормировки
+# ---------------------------------------------------------------------------
+def matlab_csd_divider(divisor, matlab_exe=None, csd_file=None):
+    """Вызывает csd_divider(D) в MATLAB и возвращает её структуру через JSON.
+
+    Второй аргумент не передаётся: используется точность из исходного .m-файла.
+    Вычисление CSD выполняется исключительно в MATLAB.
+    """
+    if not math.isfinite(divisor) or divisor <= 0:
+        raise ValueError("Делитель для csd_divider должен быть конечным и положительным.")
+    source = Path(csd_file) if csd_file else Path(__file__).with_name("csd_divider.m")
+    source = source.resolve()
+    if not source.is_file() or source.name != "csd_divider.m":
+        raise ValueError(f"Не найден файл csd_divider.m: {source}")
+
+    # Явный путь имеет приоритет, затем используются переменная среды и PATH.
+    executable = matlab_exe or os.environ.get("MATLAB_EXE") or shutil.which("matlab")
+    if executable is None and os.name == "nt":
+        root = Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "MATLAB"
+        candidates = [root / "bin" / "matlab.exe"]
+        candidates += sorted(root.glob("R*/bin/matlab.exe"), reverse=True)
+        executable = next((str(path) for path in candidates if path.is_file()), None)
+    if executable is None:
+        raise RuntimeError("MATLAB не найден. Укажите --matlab-exe с путём к MATLAB.")
+
+    temporary = Path(tempfile.gettempdir()) / ("cic_csd_" + uuid.uuid4().hex)
+    temporary.mkdir()
+    try:
+        request = {"divisor": divisor, "sourceDir": str(source.parent),
+                   "outputFile": str(temporary / "result.json")}
+        (temporary / "request.json").write_text(json.dumps(request), encoding="utf-8")
+        # run() выполняет сценарий в его каталоге; пути передаются как данные JSON.
+        script = temporary / "call_csd.m"
+        script.write_text(
+            "request = jsondecode(fileread('request.json'));\n"
+            "addpath(request.sourceDir, '-begin');\n"
+            "c = csd_divider(request.divisor);\n"
+            "fid = fopen(request.outputFile, 'w', 'n', 'UTF-8');\n"
+            "assert(fid ~= -1, 'Cannot create MATLAB result file');\n"
+            "cleanup = onCleanup(@() fclose(fid));\n"
+            "fprintf(fid, '%s', jsonencode(c));\n"
+            "clear cleanup;\n", encoding="utf-8")
+        statement = "run('" + script.as_posix().replace("'", "''") + "')"
+        command = [str(executable)]
+        if os.name == "nt":
+            command.append("-wait")
+        command += ["-batch", statement]
+        try:
+            completed = subprocess.run(
+                command, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                timeout=300, creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+        except OSError as exc:
+            raise RuntimeError(f"Не удалось запустить MATLAB: {executable}") from exc
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError("MATLAB не завершил расчёт за 300 секунд.") from exc
+        if completed.returncode:
+            raise RuntimeError("Ошибка MATLAB при вызове csd_divider:\n" +
+                               completed.stdout + completed.stderr)
+        output = temporary / "result.json"
+        if not output.is_file():
+            raise RuntimeError("MATLAB не создал файл результата csd_divider.")
+        result = json.loads(output.read_text(encoding="utf-8-sig"))
+    finally:
+        # Удаляем только собственные временные файлы в созданном для вызова каталоге.
+        for name in ("request.json", "call_csd.m", "result.json"):
+            (temporary / name).unlink(missing_ok=True)
+        temporary.rmdir()
+
+    # MATLAB кодирует вектор из одного элемента как число: приводим его к списку.
+    def integer(value, name):
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or int(value) != value:
+            raise ValueError(f"Некорректное целое поле MATLAB: {name}")
+        return int(value)
+
+    frac_bits = integer(result["fracBits"], "fracBits")
+    count = integer(result["numTerms"], "numTerms")
+    powers = result["powers"] if isinstance(result["powers"], list) else [result["powers"]]
+    signs = result["signs"] if isinstance(result["signs"], list) else [result["signs"]]
+    powers = [integer(value, "powers") for value in powers]
+    signs = [integer(value, "signs") for value in signs]
+    if frac_bits < 0 or count < 1 or len(powers) != count or len(signs) != count or any(v not in (0, 1) for v in signs):
+        raise ValueError("Несогласованные поля результата csd_divider.")
+    return {"fracBits": frac_bits, "numTerms": count, "powers": powers, "signs": signs}
+
+
+# ---------------------------------------------------------------------------
 # Генератор пакета SystemVerilog
 # ---------------------------------------------------------------------------
 def generate_sv_package(N: int, R: int, M: int, Bin: int, Bout: int,
@@ -188,7 +293,8 @@ def generate_sv_package(N: int, R: int, M: int, Bin: int, Bout: int,
                         LOAD_AWARE_ARB: int = 1, ARB_AGE_LIMIT: int = 32,
                         ARB_HIGH_WATERMARK: int = 12,
                         COMP_L: int = 5, COMP_B: int = 12,
-                        COMP_WP_PI: float = 0.5) -> str:
+                        COMP_WP_PI: float = 0.5,
+                        matlab_exe=None, csd_file=None, PRE_NORM_WIDTH: int = 0) -> str:
     """
     Формирует пакет SystemVerilog с параметрами сокращения разрядности CIC-фильтра.
 
@@ -214,6 +320,9 @@ def generate_sv_package(N: int, R: int, M: int, Bin: int, Bout: int,
         Количество перебираемых показателей степени B из ciccomp.m (по умолчанию 12).
     COMP_WP_PI : float
         Граница полосы пропускания wp / pi (по умолчанию 0.5, то есть pi/2).
+    matlab_exe, csd_file : str или None
+        Путь к MATLAB и к исходной функции csd_divider.m.
+        По умолчанию MATLAB ищется автоматически, .m-файл — рядом с генератором.
 
     Возвращаемое значение
     --------------------
@@ -236,6 +345,26 @@ def generate_sv_package(N: int, R: int, M: int, Bin: int, Bout: int,
     num_stages = 2 * N + 1
     Bj_vec     = [r[3] for r in results]
     width_vec  = [r[4] for r in results]
+    # Требуемая ширина после последнего comb и перед нормировкой.
+    pre_norm_width = PRE_NORM_WIDTH
+    if type(pre_norm_width) is not int or pre_norm_width < 0:
+        raise ValueError("PRE_NORM_WIDTH must be a nonnegative integer")
+
+    # Предпоследний элемент соответствует Bj[2*N] в пакете SystemVerilog.
+    s_prune = Bj_vec[-2] if mode3 else 0
+    comb_width = full_bits - s_prune
+    if mode2 and pre_norm_width > comb_width:
+        raise ValueError(f"PRE_NORM_WIDTH must be <= {comb_width}")
+    
+    # Показатель S для нормировки учитывает pruning и PRE_NORM_WIDTH.
+    s_pre = max(0, comb_width - pre_norm_width) if mode2 and pre_norm_width > 0 else 0
+    norm_scale = s_prune + s_pre
+    
+    # Передаём делитель D: MATLAB возвращает CSD-представление 1/D.
+    cic_gain = (R * M) ** N
+    norm_divisor = cic_gain / (2.0 ** norm_scale)
+    norm = matlab_csd_divider(norm_divisor, matlab_exe, csd_file) if mode2 else {
+        "fracBits": 0, "numTerms": 1, "powers": [0], "signs": [0]}
 
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -272,7 +401,9 @@ def generate_sv_package(N: int, R: int, M: int, Bin: int, Bout: int,
     w(f"    localparam bit STOPBAND_EXT       = 1'b{int(mode4)}; // наличие/отсутствие расширения полосы задерживания 1/0")
     w("")
     w(f"    localparam logic [1:0] ROUND_MODE = 2'd{mode5}; // режимы округления для приведения разрядности, 0 - усечение, 1 - к +inf, 2 - к нулю")
-    w(f"    localparam bit COMP_AFR           = 1'b{int(mode6)}; // ????????")
+    w(f"    localparam bit COMP_AFR           = 1'b{int(mode6)}; // наличие/отсутствие КИХ-компенсации АЧХ 1/0")
+    w("")
+    w(f"    localparam int PRE_NORM_WIDTH = {pre_norm_width}; // наличие/отсутствие предварительного уменьшения разрядности перед нормировкой, 0 - выключено, иначе требуемая ширина после последнего comb и перед нормировкой")
     w("")
     w("    // Параметры многоканальной обработки")
     w(f"    localparam int NUM_CHANNELS       = {NUM_CHANNELS}; // Количество независимых логических потоков")
@@ -296,17 +427,24 @@ def generate_sv_package(N: int, R: int, M: int, Bin: int, Bout: int,
     w(f"    localparam int TRUNC_BITS   = {trunc_bits};")
     w("")
 
-    if mode3:
-        w("    // -----------------------------------------------------------")
-        w("    //   Bj[j]          - количество бит усекаемых на каждом каскаде j")
-        w("    //   AccumWidth[j]  - оставшееся кол-во бит на каскаде j")
-        w("    // -----------------------------------------------------------")
-        bj_str    = ", ".join(str(v) for v in Bj_vec)
-        width_str = ", ".join(str(v) for v in width_vec)
-        w(f"    localparam int Bj         [1:{num_stages}] = '{{{bj_str}}};")
-        w(f"    localparam int AccumWidth [1:{num_stages}] = '{{{width_str}}};")
-        w("")
+    w("    // -----------------------------------------------------------")
+    w("    //   Bj[j]          - количество бит усекаемых на каждом каскаде j")
+    w("    //   AccumWidth[j]  - оставшееся кол-во бит на каскаде j")
+    w("    // -----------------------------------------------------------")
+    bj_str    = ", ".join(str(v) for v in Bj_vec)
+    width_str = ", ".join(str(v) for v in width_vec)
+    w(f"    localparam int Bj         [1:{num_stages}] = '{{{bj_str}}};")
+    w(f"    localparam int AccumWidth [1:{num_stages}] = '{{{width_str}}};")
+    w("")
 
+    w("")
+    w("    // Параметры нормировки")
+    w(f"    localparam int NORM_FRAC_BITS = {norm['fracBits']}; // Параметр F, позволяет задавать точность представления, в дальнейшем на него делается поправка")
+    w(f"    localparam int NORM_CSD_TERM_COUNT = {norm['numTerms']}; // Количество коэффициентов в CSD")
+    shifts_str = ", ".join(str(value + norm["fracBits"]) for value in norm["powers"])
+    signs_str = ", ".join(str(value) for value in norm["signs"])
+    w(f"    localparam int NORM_CSD_SHIFT [0:NORM_CSD_TERM_COUNT-1] = '{{{shifts_str}}}; // Коэффициенты CSD")
+    w(f"    localparam bit NORM_CSD_NEGATIVE [0:NORM_CSD_TERM_COUNT-1] = '{{{signs_str}}}; // Знаки при слагаемых в CSD, 0 - \"+\", 1 - \"-\"")
     w("")
     w("endpackage")
 
@@ -329,7 +467,7 @@ def generate_sv_package(N: int, R: int, M: int, Bin: int, Bout: int,
 BOOL_MODES = ("OUTPUT_MODE", "NORMALIZE", "PRUNING", "STOPBAND_EXT", "COMP_AFR")
 PARAMETERS = {
     "N": (3, 2, 6),
-    "R": (8, 2, 8192),
+    "R": (8, 2, 700),
     "M": (1, 1, 2),
     "Bin": (12, 2, 20),
     "Bout": (12, 2, 20),
@@ -383,6 +521,8 @@ def build_parser():
                             help="Default: False; a flag without a value enables the mode")
     parser.add_argument("--ROUND_MODE", type=int, choices=(0, 1, 2), default=None,
                         help="0: truncate; 1: toward +inf; 2: toward zero (default: 0)")
+    parser.add_argument("--PRE_NORM_WIDTH", type=int, default=None,
+                        help="Target width before normalization in bits (0 = off)")
     for name, (default, minimum, maximum) in CHANNEL_PARAMETERS.items():
         parser.add_argument(f"--{name}", type=int, default=None,
                             help=f"Default: {default}; minimum: {minimum}" +
@@ -396,6 +536,8 @@ def build_parser():
     parser.add_argument("--COMP_WP_PI", type=float, default=None,
                         help="Passband edge as a fraction of pi, in (0, 1]; default: 0.5 (pi/2)")
     parser.add_argument("--pkg", default="cic_parameters_pkg", help="SystemVerilog package name")
+    parser.add_argument("--matlab-exe", default=None, help="Path to the MATLAB executable (optional; detected automatically by default)")
+    parser.add_argument("--csd-file", default=None, help="Path to csd_divider.m (default: next to the generator script)")
     parser.add_argument("--interactive", action="store_true",
                         help="Prompt for missing parameters and modes")
     return parser
@@ -468,6 +610,8 @@ def fill_missing_interactively(args):
                     setattr(args, name, ask_mode(f"{name} (True/False)"))
             if args.ROUND_MODE is None:
                 args.ROUND_MODE = ask_int("ROUND_MODE (0/1/2)", 0, 0, 2)
+        if args.PRE_NORM_WIDTH is None:
+            args.PRE_NORM_WIDTH = ask_int("PRE_NORM_WIDTH (bits, 0 = off)", 0, 0)   
         for name, (default, minimum, maximum) in CHANNEL_PARAMETERS.items():
             if getattr(args, name) is None:
                 if name == "ARB_HIGH_WATERMARK":
@@ -488,6 +632,8 @@ def fill_missing_interactively(args):
         args.COMP_B = 12
     if args.COMP_WP_PI is None:
         args.COMP_WP_PI = 0.5
+    if args.PRE_NORM_WIDTH is None:
+        args.PRE_NORM_WIDTH = 0
     return args
 
 
@@ -519,17 +665,22 @@ def main():
     for name in CHANNEL_PARAMETERS:
         print(f"{name} = {getattr(args, name)}")
     print(f"COMP_L={args.COMP_L}, COMP_B={args.COMP_B}, COMP_WP_PI={args.COMP_WP_PI}")
-    print("Calculating FIR compensation coefficients...")
-    generate_sv_package(
-        N=args.N, R=args.R, M=args.M, Bin=args.Bin, Bout=args.Bout,
-        mode1=args.OUTPUT_MODE, mode2=args.NORMALIZE, mode3=args.PRUNING,
-        mode4=args.STOPBAND_EXT, mode5=args.ROUND_MODE, mode6=args.COMP_AFR,
-        filename=args.out, package_name=args.pkg,
-        NUM_CHANNELS=args.NUM_CHANNELS, CHANNEL_FIFO_DEPTH=args.CHANNEL_FIFO_DEPTH,
-        LOAD_AWARE_ARB=args.LOAD_AWARE_ARB, ARB_AGE_LIMIT=args.ARB_AGE_LIMIT,
-        ARB_HIGH_WATERMARK=args.ARB_HIGH_WATERMARK,
-        COMP_L=args.COMP_L, COMP_B=args.COMP_B, COMP_WP_PI=args.COMP_WP_PI,
-    )
+    print("Calculating FIR compensation and MATLAB normalization parameters...")
+    try:
+        generate_sv_package(
+            N=args.N, R=args.R, M=args.M, Bin=args.Bin, Bout=args.Bout,
+            mode1=args.OUTPUT_MODE, mode2=args.NORMALIZE, mode3=args.PRUNING,
+            mode4=args.STOPBAND_EXT, mode5=args.ROUND_MODE, mode6=args.COMP_AFR,
+            filename=args.out, package_name=args.pkg,
+            NUM_CHANNELS=args.NUM_CHANNELS, CHANNEL_FIFO_DEPTH=args.CHANNEL_FIFO_DEPTH,
+            LOAD_AWARE_ARB=args.LOAD_AWARE_ARB, ARB_AGE_LIMIT=args.ARB_AGE_LIMIT,
+            ARB_HIGH_WATERMARK=args.ARB_HIGH_WATERMARK,
+            COMP_L=args.COMP_L, COMP_B=args.COMP_B, COMP_WP_PI=args.COMP_WP_PI,
+            matlab_exe=args.matlab_exe, csd_file=args.csd_file,
+            PRE_NORM_WIDTH=args.PRE_NORM_WIDTH,
+        )
+    except (RuntimeError, ValueError, OSError) as exc:
+        parser.error(str(exc))
 
 
 if __name__ == "__main__":
